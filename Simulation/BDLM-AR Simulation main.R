@@ -9,12 +9,12 @@ source("BDLM-AR Methods main.R")
 
 library(doParallel)
 nCores = detectCores(logical = F) # detect physical cores
-registerDoParallel(nCores)
+registerDoParallel(nCores-3)
 
 ##--------------------------------------------------------------------
 ## Function to conduct simulation under specific simulation parameters
 ##--------------------------------------------------------------------
-simulation_BDLMAR = function(fit_lag, truth_beta, mu, phi, sigma, design, sample_size, index){
+simulation_BDLMAR = function(fit_lag, fit_AR_order, truth_beta, mu, phi, sigma, design, sample_size, index){
   set.seed(index)
   N = sample_size
   sigma2 = sigma^2
@@ -54,14 +54,27 @@ simulation_BDLMAR = function(fit_lag, truth_beta, mu, phi, sigma, design, sample
   y[7] = mu + truth_beta[1] * x[7] + truth_beta[2] * x[6] + truth_beta[3] * x[5] + truth_beta[4] * x[4] + truth_beta[5] * x[3] + truth_beta[6] * x[2] + truth_beta[7] * x[1] + error[7]
   
   # Fit BDLAR model    
-  temp_model = MCMC.sampler(x=x, y=y, p=1, a0=0, b0=0, Psi0=1e-4*diag(1), gamma0=0.1, sigma20=1, iter=50000)
-  summary_temp_model=summary.posterior(posterior.data = temp_model, quantile.prob = c(0.025, 0.5, 0.975))
+  # temp_model = MCMC.sampler(x=x, y=y, p=1, a0=0, b0=0, Psi0=1e-4*diag(1), gamma0=0.1, sigma20=1, iter=50000)
+  
+  temp_model = foreach (i=1:5) %dopar% {
+    MCMC.sampler(x=x, y=y, L=fit_lag, p=fit_AR_order, a0=0, b0=0, iter=50000)
+  }
+  
+  # temp_model = mclapply(1:5, function(i){MCMC.sampler(x=x, y=y, L=fit_lag, p=fit_AR_order, a0=0, b0=0, iter=50000)}, mc.cores = 5)
+  
+  # temp_model = list()
+  # for (i in 1:5){
+  #   cat('\n','Chain', i, "starts")
+  #   temp_model = append(temp_model, list(MCMC.sampler(x=x, y=y, L=fit_lag, p=fit_AR_order, a0=0, b0=0, iter=50000)))
+  # }
+  
+  summary_temp_model=summary.posterior(posterior.data = temp_model, quantile.prob = c(0.025, 0.5, 0.975), n_chain = 5)
   
   sumBeta_mean = summary_temp_model['sumBeta',1]
   delay_mean = summary_temp_model['delay',1]
   phi_mean = summary_temp_model['phi',1]
   sigma_mean = summary_temp_model['sigma',1]
-  sce_mean = posterior_mean_sce_BDLAR(summary.posterior.data = summary_temp_model, fit_lag = fit_lag, truth_beta = truth_beta)
+  sce_mean = posterior_mean_Euclidean_BDLMAR(summary.posterior.data = summary_temp_model, fit_lag = fit_lag, truth_beta = truth_beta)
   mu_mean = summary_temp_model[1,1]
   beta_mean = summary_temp_model[2:(fit_lag+2),1]
   file = "Bayesian_ARMA_Gibbs_TwoParameters"
@@ -72,7 +85,7 @@ simulation_BDLMAR = function(fit_lag, truth_beta, mu, phi, sigma, design, sample
   delay_median = summary_temp_model['delay',4]
   phi_median = summary_temp_model['phi',4]
   sigma_median = summary_temp_model['sigma',4] 
-  sce_median = posterior_median_sce_BDLAR(summary.posterior.data = summary_temp_model, fit_lag = fit_lag, truth_beta = truth_beta)
+  sce_median = posterior_median_Euclidean_BDLMAR(summary.posterior.data = summary_temp_model, fit_lag = fit_lag, truth_beta = truth_beta)
   mu_median = summary_temp_model[1,4]
   beta_median = summary_temp_model[2:(fit_lag+2),4]
   file = "Bayesian_ARMA_Gibbs_TwoParameters"
@@ -100,8 +113,16 @@ simulation_BDLMAR = function(fit_lag, truth_beta, mu, phi, sigma, design, sample
   result_cvg = cvg_table[,1]<=cvg_table$truth_all & cvg_table[,2]>=cvg_table$truth_all
   result_covernull = cvg_table[,1] * cvg_table[,2] < 0
   
-  return(list(result_mean, result_median, result_cvg, result_covernull, result_range))
+  psrf = gr.diag(temp_model)
+  stable_output = stable.GR(stable.GR.transformer(temp_model), multivariate = TRUE)
+  stable_psrf = stable_output$psrf
+  names(stable_psrf) = c("mu", sprintf("beta%s", c(0:fit_lag)), "sigma2", "phi", "gamma1", "gamma2")
+  stable_mpsrf = stable_output$mpsrf
+  
+  return(list(result_mean, result_median, result_cvg, result_covernull, result_range, psrf, stable_psrf, stable_mpsrf))
 }
+
+test = simulation_BDLMAR(fit_lag=7, fit_AR_order=1, truth_beta=beta1, mu=10, phi=0.5, sigma=10, design="ABBA", sample_size=120, index=0)
 
 #####################################
 # Parallel computing for simulation #
@@ -114,36 +135,46 @@ mycombine = function(list1, list2){
   return (list1)
 }
 
-simulation_summary_BDLMAR = function(fit_lag, truth_beta, mu, phi, sigma, design, sample_size, iter = 100){
+simulation_summary_BDLMAR = function(fit_lag, fit_AR_order, truth_beta, mu, phi, sigma, design, sample_size, iter = 100){
   
   result_combine_mean = NULL #collect posterior mean
   result_combine_median = NULL #collect posterior median
   result_combine_cvg = NULL #collect whether 95% posterior credible interval cover the truth
   result_combine_range = NULL #collect the width of 95% posterior credible interval
   result_combine_covernull = NULL #collect whether 95% posterior credible interval cover 0
+  result_combine_psrf = NULL
+  result_combine_stable_psrf = NULL
+  result_combine_stable_mpsrf = NULL
   
-  foreach (i = 1:iter, .combine = mycombine) %dopar%{
-    output = simulation_BDLAR(fit_lag, truth_beta, mu, phi, sigma, design, sample_size, index = 100+i)
-  }
+  # foreach (i = 1:iter, .combine = mycombine) %dopar%{
+  #   output = simulation_BDLMAR(fit_lag, fit_AR_order, truth_beta, mu, phi, sigma, design, sample_size, index = 100+i)
+  # }
   
   # Switch to regular loop
-  # for (i in 1:iter){
-  #   cat('\n','Simulation round', i, "is running")
-  #   output = simulation_BDLAR(fit_lag, truth_beta, mu, sigma, phi, design, sample_size, index = i)
-  #   result_combine_mean = rbind(result_combine_mean, output[[1]])
-  #   result_combine_median = rbind(result_combine_median, output[[2]])
-  #   result_combine_cvg = rbind(result_combine_cvg, output[[3]])
-  #   result_combine_covernull = rbind(result_combine_covernull, output[[4]])
-  #   result_combine_range = rbind(result_combine_range, output[[5]])
-  # }
-  # return(list(result_combine_mean, result_combine_median, result_combine_cvg, result_combine_covernull, result_combine_range))
+  for (i in 1:iter){
+    cat('\n', '######################################')
+    cat('\n','Simulation round', i, "is running")
+    output = simulation_BDLMAR(fit_lag=fit_lag, fit_AR_order=fit_AR_order, truth_beta=truth_beta, mu=mu, sigma=sigma, phi=phi, design=design, sample_size=sample_size, index = i)
+    result_combine_mean = rbind(result_combine_mean, output[[1]])
+    result_combine_median = rbind(result_combine_median, output[[2]])
+    result_combine_cvg = rbind(result_combine_cvg, output[[3]])
+    result_combine_covernull = rbind(result_combine_covernull, output[[4]])
+    result_combine_range = rbind(result_combine_range, output[[5]])
+    result_combine_psrf = rbind(result_combine_psrf, output[[6]])
+    result_combine_stable_psrf = rbind(result_combine_stable_psrf, output[[7]])
+    result_combine_stable_mpsrf = rbind(result_combine_stable_mpsrf, output[[8]])
+  }
+  return(list(result_combine_mean, result_combine_median, result_combine_cvg, result_combine_covernull, result_combine_range, result_combine_psrf, result_combine_stable_psrf, result_combine_stable_mpsrf))
 }
 
 #############################
 # End of parallel computing #
 #############################
-
-
+start = Sys.time()
+print(start)
+test = simulation_summary_BDLMAR(fit_lag=7, fit_AR_order=1, truth_beta=beta1, mu=10, phi=0.5, sigma=10, design="ABBA", sample_size=120, iter=5)
+end = Sys.time()
+print(end-start)
 
 ##-----------------------------------------------------------
 ## Function to generate metrics for single simulation object
@@ -202,3 +233,5 @@ simulation_metrics_BDLMAR = function(data, truth_all){
   
   return(data.frame(truth_all, bias_mean, MSE_mean, bias_median, MSE_median, CVG, CoverNull, width))
 }
+
+simulation_metrics_BDLMAR(test, truth_all = truth_all)
