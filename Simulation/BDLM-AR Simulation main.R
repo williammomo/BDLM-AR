@@ -7,6 +7,7 @@
 source("BDLM-AR Methods supporting.R")
 source("BDLM-AR Methods main time varying.R")
 
+library(dplyr)
 library(doParallel)
 nCores = detectCores(logical = F) # detect physical cores
 # registerDoParallel(nCores-3)
@@ -212,7 +213,7 @@ simulation_summary_BDLMAR = function(fit_lag, fit_AR_order, truth_beta, mu, phi,
 #############################
 start = Sys.time()
 print(start)
-test = simulation_summary_BDLMAR(fit_lag=7, fit_AR_order=1, truth_beta=beta1, mu=10, phi=0.5, sigma=10, design="ABBA", sample_size=120, iter=2)
+test = simulation_summary_BDLMAR(fit_lag=7, fit_AR_order=1, truth_beta=c(5, 5/2, 5/4, 5/8, 5/16, 0, 0, 0), mu=10, phi=0.5, sigma=10, design="ABBA", sample_size=120, iter=2)
 end = Sys.time()
 print(end-start)
 
