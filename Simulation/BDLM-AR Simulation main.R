@@ -5,7 +5,7 @@
 ###################################################
 
 source("BDLM-AR Methods supporting.R")
-source("BDLM-AR Methods main.R")
+source("BDLM-AR Methods main time varying.R")
 
 library(doParallel)
 nCores = detectCores(logical = F) # detect physical cores
