@@ -52,14 +52,16 @@ root.check=function(phi){
   return(all(abs(root)>1))
 }
 
-##' Create function to generate prior precision matrix on lag coefficient beta
+
+##' Create function to generate prior precision matrix on lag coefficient beta when time varying covariates exist
 ##' 
 ##' @slot L the lag length of distributed lag model
+##' @slot q the number of time varying covariates
 ##' @slot gamma1 the increasing rate of ridge penalty
 ##' @slot gamma2 the increasing rate of smoothness penalty
 ##' @slot var_mu the inverse is prior variance on the intercept mu
 
-create.Lambda.matrix=function(L, gamma1, gamma2, var_mu){
+create.Lambda.matrix=function(L, q=0, gamma1, gamma2, var_mu){
   Lambda=matrix(0, nrow=L+1, ncol=L+1)
   lambda.diag = exp(gamma1*seq(L+1))-1
   lambda.tridiag = exp(gamma2*seq(L+1))-1
@@ -74,40 +76,69 @@ create.Lambda.matrix=function(L, gamma1, gamma2, var_mu){
     Lambda[j,j+1] = -lambda.tridiag[j];
     Lambda[j+1,j] = -lambda.tridiag[j];
   }
-  Lambda0=cbind(c(var_mu, rep(0, L+1)), rbind(rep(0, L+1), Lambda))
-  return(Lambda0)
-}
-
-##' Create function to implement DETGTRI algorithm to check whether the precision matrix is positive definite
-##' 
-##' @slot input the precision matrix
-
-checkTridiag=function(input){
-  n = ncol(input)
-  d = diag(input)
-  b = rep(NA,n-1)
-  c = rep(NA,n)
-  c[1] = d[1]
-  for (i in 1:(n-1)){
-    b[i] = input[i,i+1]
-    c[i+1] = d[i+1] - b[i]^2/c[i]
+  Lambda0 = Lambda
+  if (q==0){
+    Lambda0 = cbind(c(var_mu, rep(0, L+1+q)), rbind(rep(0, L+1+q), Lambda0))
   }
-  return(all(c>0))
+  else if (q>0){
+    for (k in 1:q){
+      Lambda0 = cbind(c(var_mu, rep(0, L+k)), rbind(rep(0, L+k), Lambda0))
+    }
+    Lambda0 = cbind(c(var_mu, rep(0, L+1+q)), rbind(rep(0, L+1+q), Lambda0))
+  }
+  return(Lambda0)
 }
 
 ##' Create function to generate design matrix based on the treatment sequence
 ##' 
 ##' @slot x the vector of the treatment indicator
+##' @slot z the matrix of the time varying covariates
 ##' @slot L the lag length of distributed lag curve
 
-BDLM_design_matrix = function(x, L){
+BDLM_design_matrix = function(x, z=NULL, L){
   if (L<1) {stop("Lag length must be >= 1")}
   n = length(x)
-  temp_matrix = cbind(rep(1,n), x)
+  temp_matrix = cbind(rep(1,n), z, x)
   for(i in 1:L){
     lag_x = c(rep(0,i), x[1:(n-i)])
     temp_matrix = cbind(temp_matrix, lag_x)
     colnames(temp_matrix) = NULL
   }
   return(temp_matrix)
+}
+
+##' Create function to calculate mean for matrix and vector
+##' 
+##' @slot data the input posterior samples
+array.mean = function(data){
+  if (is.matrix(data)){
+    res = rowMeans(data)
+  } else{
+    res = mean(data)
+  }
+  return(res)
+}
+
+##' Create function to calculate variance for matrix and vector
+##' 
+##' @slot data the input posterior samples
+array.var = function(data){
+  if (is.matrix(data)){
+    res = apply(data,1,var)
+  } else{
+    res = var(data)
+  }
+  return(res)
+}
+
+##' Create function to column combine multiple elements in list
+##' 
+##' @slot data the input posterior samples
+array.bind = function(data1, data2){
+  if (is.matrix(data1)){
+    res = cbind(data1,data2)
+  } else{
+    res = c(data1,data2)
+  }
+  return(res)
 }
