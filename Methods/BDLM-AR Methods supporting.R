@@ -89,24 +89,6 @@ create.Lambda.matrix=function(L, q=0, gamma1, gamma2, var_mu){
   return(Lambda0)
 }
 
-
-##' Create function to implement DETGTRI algorithm to check whether the precision matrix is positive definite
-##' 
-##' @slot input the precision matrix
-
-checkTridiag=function(input){
-  n = ncol(input)
-  d = diag(input)
-  b = rep(NA,n-1)
-  c = rep(NA,n)
-  c[1] = d[1]
-  for (i in 1:(n-1)){
-    b[i] = input[i,i+1]
-    c[i+1] = d[i+1] - b[i]^2/c[i]
-  }
-  return(all(c>0))
-}
-
 ##' Create function to generate design matrix based on the treatment sequence
 ##' 
 ##' @slot x the vector of the treatment indicator

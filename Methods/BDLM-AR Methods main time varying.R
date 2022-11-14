@@ -7,6 +7,7 @@
 source("BDLM-AR Methods supporting.R")
 
 library(MASS)
+library(doParallel)
 
 ##' Hybrid MH/Gibbs sampler function
 ##' Create function to perform hybrid MH/Gibbs sampler for each parameter
@@ -25,7 +26,7 @@ library(MASS)
 ##' @slot burnin burnin number
 ##' @slot seed set a given seed
 
-MCMC.sampler=function(x, y, z=NULL, L, p, z_dim=0, beta0=rep(0, L+2+z_dim), a0=0, b0=0, phi0=rep(0,p), iter=100, burnin=round(iter/2), seed=NULL){
+MCMC.sampler=function(x, y, z=NULL, L, p, z_dim=0, beta0=rep(0, L+2+z_dim), a0=0, b0=0, iter=100, burnin=round(iter/2), seed=NULL){
   x = BDLM_design_matrix(x, z, L)
   
   if(!is.null(seed)){
@@ -53,6 +54,8 @@ MCMC.sampler=function(x, y, z=NULL, L, p, z_dim=0, beta0=rep(0, L+2+z_dim), a0=0
   
   gamma2.vec=rep(NA,iter)
   gamma2.vec[1]=gamma0
+  
+  mh.vec=rep(0,iter)
   
   Lambda0=create.Lambda.matrix(L=L, q=z_dim, gamma1=gamma0, gamma2=gamma0, var_mu=0.01)
   
@@ -85,7 +88,7 @@ MCMC.sampler=function(x, y, z=NULL, L, p, z_dim=0, beta0=rep(0, L+2+z_dim), a0=0
     current_gamma = c(gamma1.vec[i-1], gamma2.vec[i-1])
     proposed_gamma = current_gamma + rnorm(2, mean=0, sd=0.2)
     proposed_det = det(1/sigma2.vec[i]*(create.Lambda.matrix(L=L, q=z_dim, gamma1=proposed_gamma[1], gamma2=proposed_gamma[2], var_mu=0.01)))
-    if (proposed_det<=0 | checkTridiag(create.Lambda.matrix(L=L, q=z_dim, gamma1=proposed_gamma[1], gamma2=proposed_gamma[2], var_mu=0.01)) == FALSE){
+    if (proposed_det<=0){
       gamma1.vec[i] = current_gamma[1]
       gamma2.vec[i] = current_gamma[2]      
     } else {
@@ -94,6 +97,7 @@ MCMC.sampler=function(x, y, z=NULL, L, p, z_dim=0, beta0=rep(0, L+2+z_dim), a0=0
         #if(log(runif(1))<A & all(proposed_gamma>0)){      
         gamma1.vec[i] = proposed_gamma[1]
         gamma2.vec[i] = proposed_gamma[2]
+        mh.vec[i] = 1
       } else {
         gamma1.vec[i] = current_gamma[1]
         gamma2.vec[i] = current_gamma[2]
@@ -114,7 +118,7 @@ MCMC.sampler=function(x, y, z=NULL, L, p, z_dim=0, beta0=rep(0, L+2+z_dim), a0=0
     #Add restriction indicator
     while (root.check(phi.matrix[,i])==FALSE) {phi.matrix[,i]=mvrnorm(n=1, mu=phi.n, Sigma=chol2inv(chol(Psi.n)))}
   }
-  return(list(beta=beta.matrix[,(burnin+1):iter], sigma2=sigma2.vec[(burnin+1):iter], phi=phi.matrix[,(burnin+1):iter], gamma1=gamma1.vec[(burnin+1):iter], gamma2=gamma2.vec[(burnin+1):iter]))
+  return(list(beta=beta.matrix[,(burnin+1):iter], sigma2=sigma2.vec[(burnin+1):iter], phi=phi.matrix[,(burnin+1):iter], gamma1=gamma1.vec[(burnin+1):iter], gamma2=gamma2.vec[(burnin+1):iter], acceptance=mh.vec[(burnin+1):iter]))
 }
 
 # Test
@@ -122,7 +126,7 @@ set.seed(0)
 x_test = rbinom(100, size = 1, prob = 0.5)
 y_test = rnorm(100, mean = 10, sd = 2)
 z_test = matrix(rnorm(100*3), ncol=3)
-output_test = MCMC.sampler(x_test, y_test, z=z_test, L=7, beta0=rep(0, 12), p=7, z_dim=3, phi0=rep(0,7), iter = 1e4)
+output_test = MCMC.sampler(x_test, y_test, z=z_test, L=7, p=7, z_dim=3, iter = 1e4)
 
 ##' Create function to generate summary statistics of samples from posterior distribution
 ##' 
@@ -179,7 +183,10 @@ summary.posterior=function(posterior.data, quantile.prob = c(0.025, 0.5, 0.975),
 }
 
 # Test
-summary_test = summary.posterior(output_test)
+output_test = foreach (i=1:5) %dopar% {
+  MCMC.sampler(x_test, y_test, z=z_test, L=7, beta0=rep(0, 12), p=7, z_dim=3, iter = 1e4)
+}
+summary_test = summary.posterior(output_test, z_dim=3, n_chain=5)
 
 ##' Create function to calculate Euclidean distance between true and posterior mean estimated DL curve
 ##' 
@@ -189,7 +196,7 @@ summary_test = summary.posterior(output_test)
 
 posterior_mean_Euclidean_BDLMAR = function(summary.posterior.data, fit_lag, truth_beta){
   len_truth = length(truth_beta)
-  mybeta = summary.posterior.data[,1][2:(fit_lag+2)]
+  mybeta = summary.posterior.data[,1][startsWith(rownames(summary.posterior.data), "beta")]
   len_coef = length(mybeta)
   
   if (len_coef<len_truth) mybeta = append(mybeta, rep(0, len_truth-len_coef))
@@ -210,7 +217,7 @@ posterior_mean_Euclidean_BDLMAR(summary_test, fit_lag = 7, truth_beta = rep(0,7)
 
 posterior_median_Euclidean_BDLMAR = function(summary.posterior.data, fit_lag, truth_beta){
   len_truth = length(truth_beta)
-  mybeta = summary.posterior.data[,4][2:(fit_lag+2)]
+  mybeta = summary.posterior.data[,4][startsWith(rownames(summary.posterior.data), "beta")]
   len_coef = length(mybeta)
   
   if (len_coef<len_truth) mybeta = append(mybeta, rep(0, len_truth-len_coef))
@@ -262,23 +269,30 @@ gr.diag = function(posterior.data, z_dim = 0){
 }
 
 # Test
-# gr_test = gr.diag(output_test)
+gr_test = gr.diag(output_test, z_dim=3)
 
+##' Create function to implement the stable Gelman–Rubin convergence diagnostic
+##' 
+##' @slot posterior.data the samples from posterior distribution
+##' 
 library(stableGR)
-stable.GR.transformer = function(multi_res){
-  n_chain = length(multi_res)
-  n_matrix = length(multi_res[[1]])
+stable.GR.transformer = function(posterior.data){
+  J = length(posterior.data)
+  n_matrix = length(posterior.data[[1]])
   res = list()
-  for(j in 1:n_chain){
+  for(j in 1:J){
     temp = NULL
     for(i in 1:n_matrix){
-      if(is.matrix(multi_res[[j]][[i]])){
-        temp = cbind(temp,t(multi_res[[j]][[i]]))
+      if(is.matrix(posterior.data[[j]][[i]])){
+        temp = cbind(temp,t(posterior.data[[j]][[i]]))
       } else{
-        temp = cbind(temp,multi_res[[j]][[i]])
+        temp = cbind(temp,posterior.data[[j]][[i]])
       }
     }
     res = append(res,list(temp))
   }
   return(res)
 }
+
+# Test
+stable_GR_test = stable.GR(stable.GR.transformer(output_test), multivariate = TRUE)$psrf
